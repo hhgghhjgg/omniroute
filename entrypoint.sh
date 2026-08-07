@@ -36,8 +36,8 @@ if [ -z "$PORT" ]; then
     export PORT=10000
 fi
 
-if [ -z "$HOST" ]; then
-    echo "⚠️ WARNING: HOST not set, defaulting to 0.0.0.0"
+if [ -z "$HOST" ] || [ "$HOST" = "[::]" ]; then
+    echo "⚠️ WARNING: HOST not set or invalid, defaulting to 0.0.0.0"
     export HOST=0.0.0.0
 fi
 
@@ -122,11 +122,16 @@ echo ""
 
 # ============================================================
 # Build Command Arguments
+# CRITICAL FIX: omniroute serve does NOT support --host flag!
+# HOST must be set via environment variable only.
 # ============================================================
 echo "🛠️ Building startup command..."
 
+# HOST is passed via environment variable (not CLI flag)
+# OmniRoute reads HOST from environment automatically
+export HOST="${OMNIROUTE_HOST}"
+
 OMNI_ARGS=()
-OMNI_ARGS+=("--host" "${OMNIROUTE_HOST}")
 OMNI_ARGS+=("--port" "${OMNIROUTE_PORT}")
 
 if [ -n "$OMNIROUTE_DATA_DIR" ]; then
@@ -136,7 +141,7 @@ fi
 OMNI_ARGS+=("--no-open")
 OMNI_ARGS+=("--log")
 
-echo "✅ Command will be: omniroute serve ${OMNI_ARGS[*]}"
+echo "✅ Command will be: HOST=${HOST} omniroute serve ${OMNI_ARGS[*]}"
 echo ""
 
 # ============================================================
@@ -185,6 +190,7 @@ echo "Data directory: ${OMNIROUTE_DATA_DIR}"
 echo ""
 
 # Start OmniRoute in background
+# HOST is passed via environment variable
 omniroute serve "${OMNI_ARGS[@]}" &
 OMNI_PID=$!
 

@@ -1,0 +1,180 @@
+# ============================================================
+# Render Blueprint for OmniRoute
+# This file allows one-click deployment to Render
+# ============================================================
+
+services:
+  - type: web
+    name: omniroute-app
+    runtime: docker
+    plan: free
+    # Docker configuration
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Port configuration
+    port: 20128
+    # Health check - keeps service alive on free plan
+    healthCheckPath: /health
+    healthCheckInterval: 30
+    # Environment variables
+    envVars:
+      # Server configuration
+      - key: PORT
+        value: "20128"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: OMNIROUTE_PORT
+        value: "20128"
+      - key: OMNIROUTE_HOST
+        value: "0.0.0.0"
+      
+      # Data persistence
+      - key: OMNIROUTE_DATA_DIR
+        value: /app/data
+      - key: OMNIROUTE_DB_PATH
+        value: /app/data/omniroute.db
+      - key: OMNIROUTE_CONFIG_PATH
+        value: /app/data/config.json
+      
+      # Memory limit for Render Free tier
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=384"
+      
+      # Disable telemetry
+      - key: OMNIROUTE_TELEMETRY
+        value: "0"
+      - key: OMNIROUTE_ANALYTICS
+        value: "0"
+      
+      # ============================================================
+      # OPTIONAL: API Key protection for OmniRoute dashboard
+      # Set this to a strong password to protect your dashboard
+      # If not set, anyone with your URL can access the dashboard
+      # ============================================================
+      - key: OMNIROUTE_API_KEY
+        sync: false  # User must set this manually in Render dashboard
+      
+      # ============================================================
+      # OPTIONAL: Provider API Keys
+      # You can set these here or add them through the dashboard
+      # Setting them here makes them persist across restarts
+      # ============================================================
+      
+      # DeepSeek (free tier: https://platform.deepseek.com)
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      
+      # Google Gemini (free tier: https://aistudio.google.com/apikey)
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      
+      # SiliconFlow (free tier: https://siliconflow.cn)
+      - key: SILICONFLOW_API_KEY
+        sync: false
+      
+      # Groq (free tier: https://console.groq.com)
+      - key: GROQ_API_KEY
+        sync: false
+      
+      # OpenRouter (free models: https://openrouter.ai)
+      - key: OPENROUTER_API_KEY
+        sync: false
+      
+      # Z.AI GLM (free tier)
+      - key: ZAI_API_KEY
+        sync: false
+      
+      # Cerebras (free tier)
+      - key: CEREBRAS_API_KEY
+        sync: false
+      
+      # Together AI (free tier)
+      - key: TOGETHER_API_KEY
+        sync: false
+      
+      # Fireworks AI (free tier)
+      - key: FIREWORKS_API_KEY
+        sync: false
+      
+      # NVIDIA NIM (free tier)
+      - key: NVIDIA_API_KEY
+        sync: false
+      
+      # Hugging Face (free tier)
+      - key: HUGGINGFACE_API_KEY
+        sync: false
+      
+      # Mistral AI (free tier)
+      - key: MISTRAL_API_KEY
+        sync: false
+      
+      # Cohere (free tier)
+      - key: COHERE_API_KEY
+        sync: false
+      
+      # ============================================================
+      # OPTIONAL: OAuth/Session providers
+      # These are typically configured through the dashboard
+      # but can be set here for persistence
+      # ============================================================
+      
+      # Qwen OAuth tokens (from auth-extract or manual)
+      - key: QWEN_ACCESS_TOKEN
+        sync: false
+      - key: QWEN_REFRESH_TOKEN
+        sync: false
+      - key: QWEN_RESOURCE_URL
+        sync: false
+      
+      # Kiro AI (Claude access via OAuth)
+      - key: KIRO_SESSION_TOKEN
+        sync: false
+      
+      # OpenCode Free (no auth needed)
+      # No key required
+      
+      # Pollinations (no auth needed)
+      # No key required
+    
+    # Disk for persistent storage (Render Free: ephemeral)
+    # Note: On free plan, data resets on restart
+    # For true persistence, use an external database
+    disk:
+      name: omniroute-data
+      mountPath: /app/data
+      sizeGB: 1
+    
+    # Scaling configuration
+    scaling:
+      minInstances: 0
+      maxInstances: 1
+    
+    # Auto-deploy from main branch
+    autoDeploy: true
+    
+    # Log configuration
+    logStream: true
+
+# ============================================================
+# OPTIONAL: Cron job to keep OmniRoute alive
+# Render Free plan scales to zero after 15 minutes of inactivity
+# This cron job pings OmniRoute every 10 minutes to keep it alive
+# ============================================================
+cronJobs:
+  - type: cron
+    name: omniroute-keepalive
+    schedule: "*/10 * * * *"  # Every 10 minutes
+    command: |
+      # Get the service URL from Render environment
+      SERVICE_URL="${RENDER_EXTERNAL_HOSTNAME:-omniroute-app.onrender.com}"
+      
+      # Ping the health endpoint to keep service awake
+      curl -sf "https://${SERVICE_URL}/health" > /dev/null 2>&1 || true
+      
+      # Also ping models endpoint
+      curl -sf "https://${SERVICE_URL}/v1/models" > /dev/null 2>&1 || true
+      
+      echo "Keepalive ping sent at $(date)"
+    plan: free

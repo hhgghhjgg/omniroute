@@ -1,38 +1,93 @@
-FROM node:22-alpine
+# ============================================================
+# OmniRoute Dockerfile - Railway/Render Ready
+# Debian 12 (Bookworm) Base - TLS Client Compatible
+# ============================================================
 
-RUN echo "Final: 2026-08-07-no-host-flag-v6"
+FROM node:22-bookworm
 
-WORKDIR /app
+LABEL maintainer="OmniRoute Railway Deployment"
+LABEL description="OmniRoute with TLS impersonation support (libresolv.so.2)"
 
-RUN apk add --no-cache curl
-
-RUN npm install -g omniroute --omit=dev --ignore-scripts 2>/dev/null || \
-    npm install -g omniroute --legacy-peer-deps --ignore-scripts
-
+# ============================================================
+# Build Arguments & Environment
+# ============================================================
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NODE_ENV=production
 ENV PORT=10000
 ENV HOST=0.0.0.0
-ENV NODE_OPTIONS="--max-old-space-size=256"
+ENV NODE_OPTIONS="--max-old-space-size=512"
 ENV OMNIROUTE_DATA_DIR=/app/data
-ENV INITIAL_PASSWORD=ChangeMe2026
 ENV OMNIROUTE_TELEMETRY=0
 ENV OMNIROUTE_ANALYTICS=0
 ENV OMNIROUTE_COMPRESSION_MODE=off
-ENV OMNIROUTE_COMPRESSION_LLMLINGUA=0
-ENV OMNIROUTE_ENABLE_MCP=0
-ENV OMNIROUTE_ENABLE_A2A=0
-ENV OMNIROUTE_ENABLE_MEMORY=0
 ENV OMNIROUTE_LOG_LEVEL=warn
 ENV OMNIROUTE_MAX_CONCURRENT=2
 ENV PRICING_SYNC_ENABLED=false
 ENV MODELS_DEV_ENABLED=false
-ENV REDIS_URL=
 
-RUN mkdir -p /app/data
+# ============================================================
+# Install System Dependencies (Critical for TLS Client)
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    curl \
+    ca-certificates \
+    dnsutils \
+    libc6 \
+    libssl3 \
+    libstdc++6 \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
 
-EXPOSE 10000
+# Verify libresolv.so.2 exists (Critical for tls-client)
+RUN if [ ! -f /lib/x86_64-linux-gnu/libresolv.so.2 ]; then \
+        echo "❌ ERROR: libresolv.so.2 not found!"; \
+        exit 1; \
+    fi && \
+    echo "✅ libresolv.so.2 found at: $(find / -name 'libresolv.so.2' 2>/dev/null | head -1)"
 
+# ============================================================
+# Create App Directory
+# ============================================================
+WORKDIR /app
+
+# ============================================================
+# Install OmniRoute Globally
+# ============================================================
+RUN npm install -g omniroute --omit=dev --ignore-scripts 2>/dev/null || \
+    npm install -g omniroute --legacy-peer-deps --ignore-scripts || \
+    npm install -g omniroute --force
+
+# Verify OmniRoute installation
+RUN which omniroute && omniroute --version 2>/dev/null || echo "OmniRoute installed (version check skipped)"
+
+# ============================================================
+# Create Data Directories
+# ============================================================
+RUN mkdir -p /app/data/sessions \
+    /app/data/providers \
+    /app/data/compression \
+    /app/data/logs \
+    && chmod -R 755 /app/data
+
+# ============================================================
+# Copy Entrypoint Script
+# ============================================================
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# ============================================================
+# Expose Port
+# ============================================================
+EXPOSE ${PORT}
+
+# ============================================================
+# Health Check
+# ============================================================
 HEALTHCHECK --interval=60s --timeout=30s --start-period=180s --retries=3 \
-    CMD curl -sf http://localhost:10000/health || exit 1
+    CMD curl -sf http://localhost:${PORT}/health || exit 1
 
-# فقط --port، بدون --host
-CMD ["sh", "-c", "omniroute serve --port ${PORT:-10000} --no-open --log"]
+# ============================================================
+# Entrypoint
+# ============================================================
+ENTRYPOINT ["/entrypoint.sh"]

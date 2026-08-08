@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ============================================================
-# OmniRoute Entrypoint Script
-# Ensures proper port binding and environment configuration
+# OmniRoute Entrypoint Script - Railway Compatible
+# FINAL VERSION - All CLI flags validated
 # ============================================================
 
 set -e
@@ -25,52 +25,47 @@ echo "  OMNIROUTE_DATA_DIR: ${OMNIROUTE_DATA_DIR:-NOT SET}"
 echo "  OMNIROUTE_DB_PATH: ${OMNIROUTE_DB_PATH:-NOT SET}"
 echo "  OMNIROUTE_CONFIG_PATH: ${OMNIROUTE_CONFIG_PATH:-NOT SET}"
 echo "  NODE_OPTIONS: ${NODE_OPTIONS:-NOT SET}"
-echo "  INITIAL_PASSWORD: $([ -n "$INITIAL_PASSWORD" ] && echo "SET (length: ${#INITIAL_PASSWORD})" || echo "NOT SET")"
 echo ""
 
 # ============================================================
 # Validate Required Variables
 # ============================================================
 if [ -z "$PORT" ]; then
-    echo "⚠️ WARNING: PORT not set, defaulting to 10000"
-    export PORT=10000
+    echo "⚠️ WARNING: PORT not set, defaulting to 20128"
+    export PORT=20128
 fi
 
-if [ -z "$HOST" ] || [ "$HOST" = "[::]" ]; then
-    echo "⚠️ WARNING: HOST not set or invalid, defaulting to 0.0.0.0"
+# CRITICAL: Always force HOST to 0.0.0.0 for Railway
+if [ -z "$HOST" ] || [ "$HOST" = "[::]" ] || [ "$HOST" = "localhost" ] || [ "$HOST" = "127.0.0.1" ]; then
+    echo "⚠️ HOST invalid or not set, forcing 0.0.0.0 for Railway compatibility"
     export HOST=0.0.0.0
 fi
 
-# Ensure OmniRoute uses the same port/host
+# Set OmniRoute environment variables
+# OmniRoute reads these from ENV, not from CLI flags
 export OMNIROUTE_PORT="${PORT}"
 export OMNIROUTE_HOST="${HOST}"
+export OMNIROUTE_DATA_DIR="${OMNIROUTE_DATA_DIR:-/app/data}"
 
-echo "🎯 Final binding configuration:"
+echo "🎯 Final configuration:"
 echo "  Will bind to: ${OMNIROUTE_HOST}:${OMNIROUTE_PORT}"
+echo "  Data directory: ${OMNIROUTE_DATA_DIR}"
 echo ""
 
 # ============================================================
 # Verify TLS Client Dependencies
 # ============================================================
 echo "🔍 Checking TLS Client dependencies..."
-if [ ! -f /lib/x86_64-linux-gnu/libresolv.so.2 ]; then
+if [ ! -f /lib/x86_64-linux-gnu/libresolv.so.2 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libresolv.so.2 ]; then
     echo "❌ ERROR: libresolv.so.2 not found!"
-    echo "This is required for TLS impersonation (chatgpt-web, claude-web, etc.)"
     exit 1
 fi
 echo "✅ libresolv.so.2 found"
-
-# Check if tls-client binary exists
-TLS_CLIENT_PATH="/root/.omniroute/tls-client/bin"
-if [ -d "$TLS_CLIENT_PATH" ]; then
-    echo "✅ TLS client directory exists"
-    ls -la "$TLS_CLIENT_PATH" 2>/dev/null || true
-fi
+echo ""
 
 # ============================================================
 # Create Required Directories
 # ============================================================
-echo ""
 echo "📁 Creating data directories..."
 DATA_DIR="${OMNIROUTE_DATA_DIR:-/app/data}"
 mkdir -p "$DATA_DIR"
@@ -79,7 +74,6 @@ mkdir -p "$DATA_DIR/providers"
 mkdir -p "$DATA_DIR/compression"
 mkdir -p "$DATA_DIR/logs"
 
-# Set permissions
 chmod -R 755 "$DATA_DIR" 2>/dev/null || true
 echo "✅ Data directories ready at: $DATA_DIR"
 echo ""
@@ -90,58 +84,34 @@ echo ""
 echo "🔍 Checking OmniRoute installation..."
 if ! command -v omniroute &> /dev/null; then
     echo "❌ ERROR: omniroute command not found!"
-    echo "Attempting emergency install..."
-    npm install -g omniroute --legacy-peer-deps
+    exit 1
 fi
 
 echo "✅ OmniRoute found at: $(which omniroute)"
 echo "✅ OmniRoute version:"
-omniroute --version 2>&1 | head -5 || echo "Version check failed but continuing..."
-echo ""
-
-# ============================================================
-# Pre-flight Checks
-# ============================================================
-echo "🔎 Pre-flight checks..."
-
-# Check if port is already in use
-if command -v ss &> /dev/null; then
-    if ss -tlnp 2>/dev/null | grep -q ":${PORT}"; then
-        echo "⚠️ WARNING: Port ${PORT} is already in use!"
-        ss -tlnp 2>/dev/null | grep ":${PORT}" || true
-    fi
-elif command -v netstat &> /dev/null; then
-    if netstat -tlnp 2>/dev/null | grep -q ":${PORT}"; then
-        echo "⚠️ WARNING: Port ${PORT} is already in use!"
-        netstat -tlnp 2>/dev/null | grep ":${PORT}" || true
-    fi
-fi
-
-echo "✅ Pre-flight checks complete"
+omniroute --version 2>&1 | head -5 || true
 echo ""
 
 # ============================================================
 # Build Command Arguments
-# CRITICAL FIX: omniroute serve does NOT support --host flag!
-# HOST must be set via environment variable only.
+# CRITICAL: omniroute serve ONLY supports these flags:
+#   --port, --no-open, --log, --daemon, --tls-cert, --tls-key,
+#   --tray, --no-recovery, --max-restarts
+#
+# HOST and DATA_DIR are read from environment variables only!
 # ============================================================
 echo "🛠️ Building startup command..."
 
-# HOST is passed via environment variable (not CLI flag)
-# OmniRoute reads HOST from environment automatically
-export HOST="${OMNIROUTE_HOST}"
-
 OMNI_ARGS=()
 OMNI_ARGS+=("--port" "${OMNIROUTE_PORT}")
-
-if [ -n "$OMNIROUTE_DATA_DIR" ]; then
-    OMNI_ARGS+=("--data-dir" "$OMNIROUTE_DATA_DIR")
-fi
-
 OMNI_ARGS+=("--no-open")
 OMNI_ARGS+=("--log")
 
-echo "✅ Command will be: HOST=${HOST} omniroute serve ${OMNI_ARGS[*]}"
+# DO NOT add --host or --data-dir! They cause "unknown option" errors!
+# HOST is read from environment variable HOST
+# DATA_DIR is read from environment variable OMNIROUTE_DATA_DIR
+
+echo "✅ Command: HOST=${HOST} OMNIROUTE_DATA_DIR=${OMNIROUTE_DATA_DIR} omniroute serve ${OMNI_ARGS[*]}"
 echo ""
 
 # ============================================================
@@ -190,7 +160,7 @@ echo "Data directory: ${OMNIROUTE_DATA_DIR}"
 echo ""
 
 # Start OmniRoute in background
-# HOST is passed via environment variable
+# HOST and OMNIROUTE_DATA_DIR are passed via environment variables
 omniroute serve "${OMNI_ARGS[@]}" &
 OMNI_PID=$!
 
@@ -201,7 +171,7 @@ echo ""
 # Wait for OmniRoute to be ready
 # ============================================================
 echo "⏳ Waiting for OmniRoute to be ready..."
-MAX_WAIT=120
+MAX_WAIT=180
 WAITED=0
 
 while [ $WAITED -lt $MAX_WAIT ]; do
@@ -210,20 +180,22 @@ while [ $WAITED -lt $MAX_WAIT ]; do
         exit 1
     fi
     
-    if curl -sf "http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/health" > /dev/null 2>&1; then
+    # Check health endpoint
+    if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/health" > /dev/null 2>&1; then
         echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
         break
     fi
     
-    if curl -sf "http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/v1/models" > /dev/null 2>&1; then
+    # Fallback to models endpoint
+    if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/v1/models" > /dev/null 2>&1; then
         echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
         break
     fi
     
-    sleep 2
-    WAITED=$((WAITED + 2))
+    sleep 3
+    WAITED=$((WAITED + 3))
     
-    if [ $((WAITED % 20)) -eq 0 ]; then
+    if [ $((WAITED % 30)) -eq 0 ]; then
         echo "⏳ Still waiting... (${WAITED}s / ${MAX_WAIT}s)"
     fi
 done
@@ -244,6 +216,7 @@ echo "=========================================="
 echo "PID: $OMNI_PID"
 echo "Host: ${OMNIROUTE_HOST}"
 echo "Port: ${OMNIROUTE_PORT}"
+echo "Data: ${OMNIROUTE_DATA_DIR}"
 echo ""
 echo "Available endpoints:"
 echo "  - Dashboard: http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/"

@@ -3,7 +3,7 @@
 # ============================================================
 # OmniRoute Entrypoint Script - Railway Compatible
 # FINAL VERSION - All CLI flags validated
-# WITH AUTO-RESTORE FROM REMOTE BACKUP (Apexgram)
+# WITH AUTO-RESTORE FROM GITHUB RAW BACKUP
 # ============================================================
 
 set -e
@@ -83,28 +83,52 @@ echo "✅ Data directories ready at: $DATA_DIR"
 echo ""
 
 # ============================================================
-# 🔽 RESTORE DATABASE FROM REMOTE BACKUP (Apexgram Link)
+# 🔽 RESTORE DATABASE FROM GITHUB RAW BACKUP
 # ============================================================
 echo "=========================================="
 echo "🔽 DATABASE RESTORE SECTION"
 echo "=========================================="
 
-# The direct download link from apexgram.ir
-BACKUP_URL="https://dl.apexgram.ir/96389/omniroute-backup-2026-08-10T10-02-08-556Z.sqlite?hash=1b3a2c"
+# GitHub Raw URL - Always works, no blocking, no expiration
+BACKUP_URL="https://raw.githubusercontent.com/hhgghhjgg/omniroute/main/omniroute-backup-2026-08-10T10-02-08-556Z.sqlite"
 
 # Target database path (OmniRoute's default location)
 DB_PATH="/root/.omniroute/storage.sqlite"
 
-if [ -n "$BACKUP_URL" ] && [ ! -f "$DB_PATH" ]; then
-    echo "⬇️  Database not found locally. Downloading backup..."
+if [ ! -f "$DB_PATH" ]; then
+    echo "⬇️  Database not found locally. Downloading backup from GitHub..."
     echo "   From: $BACKUP_URL"
     echo "   To:   $DB_PATH"
     echo ""
     
-    # Download with progress, following redirects (-L) and failing on HTTP errors (-f)
-    if curl -L -f --progress-bar -o "$DB_PATH" "$BACKUP_URL"; then
+    # Download with GitHub-friendly headers
+    # GitHub raw links always work with any User-Agent, but we add browser UA for safety
+    if curl -L -f --progress-bar \
+        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+        -H "Accept: application/octet-stream,*/*" \
+        -o "$DB_PATH" \
+        "$BACKUP_URL"; then
+        
         echo ""
         echo "✅ Backup downloaded successfully!"
+        
+        # Validate file size (must be at least 5MB for real database)
+        FILE_SIZE=$(stat -c%s "$DB_PATH" 2>/dev/null || stat -f%z "$DB_PATH" 2>/dev/null || echo "0")
+        FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
+        echo "📊 File size: ${FILE_SIZE_MB} MB (${FILE_SIZE} bytes)"
+        
+        if [ "$FILE_SIZE" -lt 5242880 ]; then
+            echo "❌ WARNING: File too small! (${FILE_SIZE_MB}MB < 5MB)"
+            echo "   This might not be a complete database backup."
+            echo ""
+            echo "🔎 First 100 characters of file:"
+            head -c 100 "$DB_PATH"
+            echo ""
+            echo "⚠️  Keeping file anyway - OmniRoute will try to migrate it"
+        else
+            echo "✅ File size is valid (>= 5MB)"
+        fi
+        
         chmod 644 "$DB_PATH"
         
         # Show file info for verification
@@ -116,9 +140,10 @@ if [ -n "$BACKUP_URL" ] && [ ! -f "$DB_PATH" ]; then
         BACKUP_COPY="/root/.omniroute/storage.restored.sqlite"
         cp "$DB_PATH" "$BACKUP_COPY"
         echo "💾 Safety copy created at: $BACKUP_COPY"
+        
     else
         echo ""
-        echo "❌ Failed to download backup!"
+        echo "❌ Failed to download backup from GitHub!"
         echo "   Starting with fresh database instead..."
         rm -f "$DB_PATH"
     fi

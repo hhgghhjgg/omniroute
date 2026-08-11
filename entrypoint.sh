@@ -3,6 +3,7 @@
 # ============================================================
 # OmniRoute Entrypoint Script - Railway Compatible
 # FINAL VERSION - All CLI flags validated
+# WITH AUTO-RESTORE FROM REMOTE BACKUP (Apexgram)
 # ============================================================
 
 set -e
@@ -74,8 +75,69 @@ mkdir -p "$DATA_DIR/providers"
 mkdir -p "$DATA_DIR/compression"
 mkdir -p "$DATA_DIR/logs"
 
+# Ensure OmniRoute home directory exists (default database location)
+mkdir -p /root/.omniroute
+
 chmod -R 755 "$DATA_DIR" 2>/dev/null || true
 echo "✅ Data directories ready at: $DATA_DIR"
+echo ""
+
+# ============================================================
+# 🔽 RESTORE DATABASE FROM REMOTE BACKUP (Apexgram Link)
+# ============================================================
+echo "=========================================="
+echo "🔽 DATABASE RESTORE SECTION"
+echo "=========================================="
+
+# The direct download link from apexgram.ir
+BACKUP_URL="https://dl.apexgram.ir/96389/omniroute-backup-2026-08-10T10-02-08-556Z.sqlite?hash=1b3a2c"
+
+# Target database path (OmniRoute's default location)
+DB_PATH="/root/.omniroute/storage.sqlite"
+
+if [ -n "$BACKUP_URL" ] && [ ! -f "$DB_PATH" ]; then
+    echo "⬇️  Database not found locally. Downloading backup..."
+    echo "   From: $BACKUP_URL"
+    echo "   To:   $DB_PATH"
+    echo ""
+    
+    # Download with progress, following redirects (-L) and failing on HTTP errors (-f)
+    if curl -L -f --progress-bar -o "$DB_PATH" "$BACKUP_URL"; then
+        echo ""
+        echo "✅ Backup downloaded successfully!"
+        chmod 644 "$DB_PATH"
+        
+        # Show file info for verification
+        echo "📊 File info:"
+        ls -lh "$DB_PATH"
+        echo ""
+        
+        # Create a safety backup copy
+        BACKUP_COPY="/root/.omniroute/storage.restored.sqlite"
+        cp "$DB_PATH" "$BACKUP_COPY"
+        echo "💾 Safety copy created at: $BACKUP_COPY"
+    else
+        echo ""
+        echo "❌ Failed to download backup!"
+        echo "   Starting with fresh database instead..."
+        rm -f "$DB_PATH"
+    fi
+elif [ -f "$DB_PATH" ]; then
+    echo "📦 Existing database found, skipping restore"
+    ls -lh "$DB_PATH"
+else
+    echo "ℹ️  No backup URL configured"
+fi
+
+# Also copy to alternate location if DATA_DIR is different
+ALT_DB_PATH="${DATA_DIR}/storage.sqlite"
+if [ -f "$DB_PATH" ] && [ "$DB_PATH" != "$ALT_DB_PATH" ]; then
+    cp "$DB_PATH" "$ALT_DB_PATH" 2>/dev/null || true
+    echo "📋 Database also copied to: $ALT_DB_PATH"
+fi
+
+echo ""
+echo "=========================================="
 echo ""
 
 # ============================================================
@@ -180,14 +242,20 @@ while [ $WAITED -lt $MAX_WAIT ]; do
         exit 1
     fi
     
-    # Check health endpoint
-    if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/health" > /dev/null 2>&1; then
+    # PRIMARY: Check /v1/models endpoint (Railway Health Check Path)
+    if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/v1/models" > /dev/null 2>&1; then
         echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
         break
     fi
     
-    # Fallback to models endpoint
-    if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/v1/models" > /dev/null 2>&1; then
+    # FALLBACK: Check /api/monitoring/health (official OmniRoute health endpoint)
+    if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/api/monitoring/health" > /dev/null 2>&1; then
+        echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
+        break
+    fi
+    
+    # FALLBACK 2: Check root dashboard
+    if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/" > /dev/null 2>&1; then
         echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
         break
     fi
@@ -221,8 +289,8 @@ echo ""
 echo "Available endpoints:"
 echo "  - Dashboard: http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/"
 echo "  - API: http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/v1"
-echo "  - Health: http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/health"
-echo "  - Models: http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/v1/models"
+echo "  - Models (Railway Health Check): http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/v1/models"
+echo "  - Health (Official): http://${OMNIROUTE_HOST}:${OMNIROUTE_PORT}/api/monitoring/health"
 echo ""
 echo "=========================================="
 echo ""

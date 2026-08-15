@@ -4,6 +4,7 @@
 # OmniRoute Entrypoint Script - Railway Compatible
 # FINAL VERSION - All CLI flags validated
 # WITH AUTO-RESTORE FROM GITHUB RAW BACKUP
+# OPTIMIZED FOR RAILWAY 1GB RAM
 # ============================================================
 
 set -e
@@ -26,6 +27,7 @@ echo "  OMNIROUTE_DATA_DIR: ${OMNIROUTE_DATA_DIR:-NOT SET}"
 echo "  OMNIROUTE_DB_PATH: ${OMNIROUTE_DB_PATH:-NOT SET}"
 echo "  OMNIROUTE_CONFIG_PATH: ${OMNIROUTE_CONFIG_PATH:-NOT SET}"
 echo "  NODE_OPTIONS: ${NODE_OPTIONS:-NOT SET}"
+echo "  STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY:+SET (hidden)}"
 echo ""
 
 # ============================================================
@@ -37,7 +39,7 @@ if [ -z "$PORT" ]; then
 fi
 
 # CRITICAL: Always force HOST to 0.0.0.0 for Railway
-if [ -z "$HOST" ] || [ "$HOST" = "[::]" ] || [ "$HOST" = "localhost" ] || [ "$HOST" = "127.0.0.1" ]; then
+if [ -z "$HOST" ] || [ "$HOST" = "::" ] || [ "$HOST" = "localhost" ] || [ "$HOST" = "127.0.0.1" ]; then
     echo "⚠️ HOST invalid or not set, forcing 0.0.0.0 for Railway compatibility"
     export HOST=0.0.0.0
 fi
@@ -48,9 +50,20 @@ export OMNIROUTE_PORT="${PORT}"
 export OMNIROUTE_HOST="${HOST}"
 export OMNIROUTE_DATA_DIR="${OMNIROUTE_DATA_DIR:-/app/data}"
 
+# 🚨 CRITICAL: Force memory limits for Railway 1GB
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=896}"
+export OMNIROUTE_MAX_CONCURRENT="${OMNIROUTE_MAX_CONCURRENT:-2}"
+export OMNIROUTE_REQUEST_TIMEOUT="${OMNIROUTE_REQUEST_TIMEOUT:-60}"
+export OMNIROUTE_COMPRESSION_MODE="${OMNIROUTE_COMPRESSION_MODE:-lite}"
+export OMNIROUTE_MAX_FALLBACK_ATTEMPTS="${OMNIROUTE_MAX_FALLBACK_ATTEMPTS:-1}"
+
 echo "🎯 Final configuration:"
 echo "  Will bind to: ${OMNIROUTE_HOST}:${OMNIROUTE_PORT}"
 echo "  Data directory: ${OMNIROUTE_DATA_DIR}"
+echo "  Max concurrent: ${OMNIROUTE_MAX_CONCURRENT}"
+echo "  Request timeout: ${OMNIROUTE_REQUEST_TIMEOUT}s"
+echo "  Compression: ${OMNIROUTE_COMPRESSION_MODE}"
+echo "  NODE_OPTIONS: ${NODE_OPTIONS}"
 echo ""
 
 # ============================================================
@@ -96,62 +109,84 @@ BACKUP_URL="https://raw.githubusercontent.com/hhgghhjgg/omniroute/main/omniroute
 DB_PATH="/root/.omniroute/storage.sqlite"
 
 if [ ! -f "$DB_PATH" ]; then
-    echo "⬇️  Database not found locally. Downloading backup from GitHub..."
-    echo "   From: $BACKUP_URL"
-    echo "   To:   $DB_PATH"
+    echo "⬇️ Database not found locally. Downloading backup from GitHub..."
+    echo "  From: $BACKUP_URL"
+    echo "  To: $DB_PATH"
     echo ""
-    
+
     # Download with GitHub-friendly headers
-    # GitHub raw links always work with any User-Agent, but we add browser UA for safety
     if curl -L -f --progress-bar \
         -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
         -H "Accept: application/octet-stream,*/*" \
         -o "$DB_PATH" \
         "$BACKUP_URL"; then
-        
+
         echo ""
         echo "✅ Backup downloaded successfully!"
-        
+
         # Validate file size (must be at least 5MB for real database)
         FILE_SIZE=$(stat -c%s "$DB_PATH" 2>/dev/null || stat -f%z "$DB_PATH" 2>/dev/null || echo "0")
         FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
         echo "📊 File size: ${FILE_SIZE_MB} MB (${FILE_SIZE} bytes)"
-        
+
         if [ "$FILE_SIZE" -lt 5242880 ]; then
             echo "❌ WARNING: File too small! (${FILE_SIZE_MB}MB < 5MB)"
-            echo "   This might not be a complete database backup."
+            echo "  This might not be a complete database backup."
             echo ""
             echo "🔎 First 100 characters of file:"
             head -c 100 "$DB_PATH"
             echo ""
-            echo "⚠️  Keeping file anyway - OmniRoute will try to migrate it"
+            echo "⚠️ Keeping file anyway - OmniRoute will try to migrate it"
         else
             echo "✅ File size is valid (>= 5MB)"
         fi
-        
+
         chmod 644 "$DB_PATH"
-        
+
         # Show file info for verification
         echo "📊 File info:"
         ls -lh "$DB_PATH"
         echo ""
+
+        # ============================================================
+        # 🧹 CLEAN UP DEAD CREDENTIALS FROM BACKUP
+        # This prevents crash loops from expired/invalid connections
+        # ============================================================
+        echo "🧹 Cleaning up dead credentials from backup..."
         
+        # Remove qwen-web (expired session)
+        sqlite3 "$DB_PATH" "DELETE FROM credentials WHERE name LIKE '%qwen-web%';" 2>/dev/null || true
+        
+        # Remove agentrouter (invalid API keys)
+        sqlite3 "$DB_PATH" "DELETE FROM credentials WHERE name LIKE '%agentrouter%';" 2>/dev/null || true
+        
+        # Remove any credentials with failed status
+        sqlite3 "$DB_PATH" "DELETE FROM credentials WHERE status = 'failed';" 2>/dev/null || true
+        
+        # Remove credentials with expired/invalid errors
+        sqlite3 "$DB_PATH" "DELETE FROM credentials WHERE last_error LIKE '%expired%';" 2>/dev/null || true
+        sqlite3 "$DB_PATH" "DELETE FROM credentials WHERE last_error LIKE '%invalid%';" 2>/dev/null || true
+        
+        echo "✅ Dead credentials cleaned from backup"
+        echo ""
+
         # Create a safety backup copy
         BACKUP_COPY="/root/.omniroute/storage.restored.sqlite"
         cp "$DB_PATH" "$BACKUP_COPY"
         echo "💾 Safety copy created at: $BACKUP_COPY"
-        
+
     else
         echo ""
         echo "❌ Failed to download backup from GitHub!"
-        echo "   Starting with fresh database instead..."
+        echo "  Starting with fresh database instead..."
         rm -f "$DB_PATH"
     fi
+
 elif [ -f "$DB_PATH" ]; then
     echo "📦 Existing database found, skipping restore"
     ls -lh "$DB_PATH"
 else
-    echo "ℹ️  No backup URL configured"
+    echo "ℹ️ No backup URL configured"
 fi
 
 # Also copy to alternate location if DATA_DIR is different
@@ -188,7 +223,6 @@ echo ""
 # HOST and DATA_DIR are read from environment variables only!
 # ============================================================
 echo "🛠️ Building startup command..."
-
 OMNI_ARGS=()
 OMNI_ARGS+=("--port" "${OMNIROUTE_PORT}")
 OMNI_ARGS+=("--no-open")
@@ -211,11 +245,11 @@ cleanup() {
     echo "=========================================="
     echo "🛑 Shutting down OmniRoute..."
     echo "=========================================="
-    
+
     if [ -n "$OMNI_PID" ] && kill -0 "$OMNI_PID" 2>/dev/null; then
         echo "Sending SIGTERM to OmniRoute (PID: $OMNI_PID)..."
         kill -TERM "$OMNI_PID" 2>/dev/null || true
-        
+
         for i in {1..30}; do
             if ! kill -0 "$OMNI_PID" 2>/dev/null; then
                 echo "✅ OmniRoute stopped gracefully"
@@ -223,13 +257,13 @@ cleanup() {
             fi
             sleep 1
         done
-        
+
         if kill -0 "$OMNI_PID" 2>/dev/null; then
             echo "⚠️ OmniRoute did not stop gracefully, forcing..."
             kill -KILL "$OMNI_PID" 2>/dev/null || true
         fi
     fi
-    
+
     echo "👋 Shutdown complete"
     exit 0
 }
@@ -244,6 +278,8 @@ echo "🚀 Starting OmniRoute..."
 echo "=========================================="
 echo "Binding to: ${OMNIROUTE_HOST}:${OMNIROUTE_PORT}"
 echo "Data directory: ${OMNIROUTE_DATA_DIR}"
+echo "Max concurrent requests: ${OMNIROUTE_MAX_CONCURRENT}"
+echo "Request timeout: ${OMNIROUTE_REQUEST_TIMEOUT}s"
 echo ""
 
 # Start OmniRoute in background
@@ -266,28 +302,28 @@ while [ $WAITED -lt $MAX_WAIT ]; do
         echo "❌ ERROR: OmniRoute process died!"
         exit 1
     fi
-    
+
     # PRIMARY: Check /v1/models endpoint (Railway Health Check Path)
     if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/v1/models" > /dev/null 2>&1; then
         echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
         break
     fi
-    
+
     # FALLBACK: Check /api/monitoring/health (official OmniRoute health endpoint)
     if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/api/monitoring/health" > /dev/null 2>&1; then
         echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
         break
     fi
-    
+
     # FALLBACK 2: Check root dashboard
     if curl -sf "http://127.0.0.1:${OMNIROUTE_PORT}/" > /dev/null 2>&1; then
         echo "✅ OmniRoute is ready! (waited ${WAITED}s)"
         break
     fi
-    
+
     sleep 3
     WAITED=$((WAITED + 3))
-    
+
     if [ $((WAITED % 30)) -eq 0 ]; then
         echo "⏳ Still waiting... (${WAITED}s / ${MAX_WAIT}s)"
     fi

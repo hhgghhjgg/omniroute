@@ -1,106 +1,96 @@
 # ============================================================
-# OmniRoute Dockerfile - Railway Ready
-# Debian 12 (Bookworm) Base - TLS Client Compatible
+# OmniRoute - Dockerfile for Railway (1GB RAM Optimized)
 # ============================================================
 
-FROM node:22-bookworm
+FROM node:20-slim AS base
 
-LABEL maintainer="OmniRoute Railway Deployment"
-LABEL description="OmniRoute with TLS impersonation support (libresolv.so.2)"
-
-# ============================================================
-# Build Arguments & Environment
-# ============================================================
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV NODE_ENV=production
-
-# ⚠️ IMPORTANT: Do NOT hardcode PORT here. 
+# ⚠️ IMPORTANT: Do NOT hardcode PORT here.
 # Railway injects the $PORT variable dynamically at runtime.
 ENV HOST=0.0.0.0
-ENV NODE_OPTIONS="--max-old-space-size=512"
-ENV OMNIROUTE_DATA_DIR=/app/data
-ENV OMNIROUTE_TELEMETRY=0
-ENV OMNIROUTE_ANALYTICS=0
-ENV OMNIROUTE_COMPRESSION_MODE=off
-ENV OMNIROUTE_LOG_LEVEL=warn
-ENV OMNIROUTE_MAX_CONCURRENT=2
-ENV PRICING_SYNC_ENABLED=false
-ENV MODELS_DEV_ENABLED=false
 
 # ============================================================
-# Install System Dependencies (Critical for TLS Client)
+# System dependencies
 # ============================================================
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash \
     curl \
+    wget \
+    sqlite3 \
     ca-certificates \
-    dnsutils \
-    libc6 \
-    libssl3 \
-    libstdc++6 \
-    procps \
+    python3 \
+    python3-pip \
+    build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify libresolv.so.2 exists (Critical for tls-client)
-RUN if [ ! -f /lib/x86_64-linux-gnu/libresolv.so.2 ]; then \
-    echo "❌ ERROR: libresolv.so.2 not found!"; \
-    exit 1; \
-fi && \
-echo "✅ libresolv.so.2 found at: $(find / -name 'libresolv.so.2' 2>/dev/null | head -1)"
+# ============================================================
+# 🚨 CRITICAL: Memory optimization for Railway 1GB RAM
+# ============================================================
+# 896MB for Node.js heap (leaves ~128MB for OS + buffers)
+ENV NODE_OPTIONS="--max-old-space-size=896"
+
+# Disable Node.js telemetry and unnecessary features
+ENV NODE_NO_WARNINGS=1
+ENV NODE_ENV=production
 
 # ============================================================
-# Create App Directory
+# 🚨 CRITICAL: Storage encryption key (prevents memory leaks)
 # ============================================================
+ENV STORAGE_ENCRYPTION_KEY="a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
 
+# ============================================================
+# OmniRoute configuration for low-memory environments
+# ============================================================
+ENV OMNIROUTE_MAX_CONCURRENT=2
+ENV OMNIROUTE_REQUEST_TIMEOUT=60
+ENV OMNIROUTE_COMPRESSION_MODE=lite
+ENV OMNIROUTE_MAX_FALLBACK_ATTEMPTS=1
+ENV OMNIROUTE_CIRCUIT_BREAKER_THRESHOLD=3
+ENV OMNIROUTE_KEY_COOLDOWN=30
+ENV OMNIROUTE_TELEMETRY=0
+ENV OMNIROUTE_ANALYTICS=0
+ENV OMNIROUTE_LOG_LEVEL=warn
+ENV OMNIROUTE_LOG_REQUESTS=0
+
+# Data directory
+ENV OMNIROUTE_DATA_DIR=/app/data
+ENV OMNIROUTE_DB_PATH=/root/.omniroute/storage.sqlite
+ENV OMNIROUTE_CONFIG_PATH=/app/data/config.json
+
+# ============================================================
+# Install OmniRoute
+# ============================================================
 WORKDIR /app
 
-# ============================================================
-# Install OmniRoute Globally
-# ============================================================
-
-RUN npm install -g omniroute --omit=dev --ignore-scripts 2>/dev/null || \
-    npm install -g omniroute --legacy-peer-deps --ignore-scripts || \
-    npm install -g omniroute --force
-
-# Verify OmniRoute installation
-RUN which omniroute && omniroute --version 2>/dev/null || echo "OmniRoute installed (version check skipped)"
+# Install omniroute globally
+RUN npm install -g omniroute@latest
 
 # ============================================================
-# Create Data Directories
+# Create data directories
 # ============================================================
-
-RUN mkdir -p /app/data/sessions \
+RUN mkdir -p /app/data \
+    /app/data/sessions \
     /app/data/providers \
     /app/data/compression \
     /app/data/logs \
-    && chmod -R 755 /app/data
+    /root/.omniroute
 
 # ============================================================
-# Copy Entrypoint Script
+# Copy entrypoint script
 # ============================================================
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # ============================================================
-# Expose Port
-# ⚠️ Railway requires a hardcoded EXPOSE directive.
-# Railway will automatically read this (8080) and inject it 
-# into your container as the $PORT environment variable at runtime.
+# Expose port (Railway will inject $PORT)
 # ============================================================
+EXPOSE 20128
 
-EXPOSE 8080
-
-# Note: Dockerfile HEALTHCHECK was intentionally removed. 
-# Railway uses its own aggressive platform-level healthcheck 
-# (which polls /health). Docker's internal healthcheck 
+# Note: Dockerfile HEALTHCHECK was intentionally removed.
+# Railway uses its own aggressive platform-level healthcheck
+# (which polls /health). Docker's internal healthcheck
 # sometimes interferes with Railway's networking layer.
-# ============================================================
 
 # ============================================================
-# Entrypoint
+# Start
 # ============================================================
-
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]
